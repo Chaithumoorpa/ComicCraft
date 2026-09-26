@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{{ title }} — ComicCraft</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+<main class="container">
+  <div class="topbar"><a href="/">← Create another</a><span>ComicCraft</span></div>
+  <section class="hero compact"><p class="eyebrow">YOUR GENERATED COMIC</p><h1>{{ title }}</h1></section>
+
+  <div class="comic-grid">
+    {% for panel in layout %}
+    <article class="card panel">
+      <div class="panel-head">
+        <span>Panel {{ panel.panel_number }}</span>
+        <h2>{{ panel.title }}</h2>
+      </div>
+      <img src="{{ panel.image_path }}" alt="{{ panel.title }}">
+      <p class="scene">{{ panel.scene_description }}</p>
+      {% if panel.caption %}<p><strong>Caption:</strong> {{ panel.caption }}</p>{% endif %}
+      {% if panel.narration %}<p><strong>Narration:</strong> {{ panel.narration }}</p>{% endif %}
+      {% if panel.dialogue %}<p><strong>Dialogue:</strong> {{ panel.dialogue }}</p>{% endif %}
+    </article>
+    {% endfor %}
+  </div>
+
+  <section class="card actions">
+    {# The PDF was already built during generation; link to it instead of rebuilding. #}
+    <a class="button-link" href="/download/{{ pdf_path.rsplit('/', 1)[-1] }}">📄 Download Your Comic as PDF</a>
+  </section>
+</main>
+</body>
+</html>
