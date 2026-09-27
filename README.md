@@ -67,6 +67,7 @@ If the model needs Hugging Face authentication, set `HF_TOKEN` in `.env`.
 | `GEMINI_API_KEY` | — | Required. Gemini API key. |
 | `GEMINI_OUTLINE_MODEL` | `gemini-3.8-flash` | Model for the 5-panel outline. |
 | `GEMINI_STORY_MODEL` | `gemini-3.1-pro-preview` | Model for narration and dialogue. |
+| `GEMINI_FALLBACK_MODEL` | empty | Optional model to switch to when the models above run out of quota (HTTP 429). |
 | `IMAGE_PROVIDER` | `diffusers` | `diffusers` for real images, `placeholder` for quick tests. |
 | `IMAGE_MODEL_ID` | `stable-diffusion-v1-5/stable-diffusion-v1-5` | Hugging Face model ID. |
 | `IMAGE_STEPS` / `IMAGE_WIDTH` / `IMAGE_HEIGHT` | `20` / `512` / `512` | Diffusion settings. |
@@ -113,7 +114,10 @@ Example body for `POST /generate-comic/json`:
 - **`pip install` fails with `ResolutionImpossible`** — use the current `requirements.txt` (diffusers 0.40 needs transformers 5.x).
 - **`GEMINI_API_KEY is not configured`** — copy `.env.example` to `.env` and add the key, then restart the server.
 - **Gemini 404 / model not found / "no longer available to new users"** — the model ID isn't available to your key; change `GEMINI_OUTLINE_MODEL` / `GEMINI_STORY_MODEL` (e.g. `gemini-2.5-pro` is closed to new users).
-- **Gemini 429 / quota exceeded** — your plan has no (or no remaining) quota for that model. Free-tier keys often have no Pro quota: set `GEMINI_STORY_MODEL=gemini-3.8-flash`, or enable billing.
+- **Gemini 429 / quota exceeded** — your plan has no (or no remaining) quota for that model. Each comic makes 2 Gemini calls (outline + story).
+  - *Per-minute limit*: the app waits the delay Gemini asks for and retries once automatically.
+  - *Daily limit* (`...PerDay...` in the details, e.g. 20 requests/day on the free tier): waiting a minute won't help; the quota resets at midnight Pacific time. Free-tier quotas are per model, so set `GEMINI_FALLBACK_MODEL` (or change `GEMINI_OUTLINE_MODEL` / `GEMINI_STORY_MODEL`) to another model your key can use, or enable billing.
+  - Free-tier keys often have no Pro quota at all: set `GEMINI_STORY_MODEL` to a Flash model.
 - **Gemini 503 / high demand** — temporary overload; the app retries 3 times automatically, then asks you to try again later.
 - **`GET /generate 405`** — no longer happens; refreshing a result page now redirects to the home page.
 - **Gemini returned an empty response** — the prompt was likely blocked by safety filters; rephrase the story.

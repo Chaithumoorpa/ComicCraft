@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     # depend on model IDs hard-coded in the original documentation.
     gemini_outline_model: str = "gemini-3.8-flash"
     gemini_story_model: str = "gemini-3.1-pro-preview"
+    # Optional: used when the models above hit their quota (HTTP 429).
+    gemini_fallback_model: str = ""
 
     image_provider: str = "diffusers"  # diffusers | placeholder
     image_model_id: str = "stable-diffusion-v1-5/stable-diffusion-v1-5"
