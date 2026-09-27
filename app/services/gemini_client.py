@@ -9,6 +9,11 @@ from app.config import get_settings
 
 # Temporary overload errors (HTTP 500/503) are retried with these waits (seconds).
 RETRY_DELAYS = (3, 8, 20)
+# A per-minute quota 429 is retried once if Gemini asks us to wait at most this long.
+MAX_QUOTA_WAIT = 65
+
+class QuotaExceeded(RuntimeError):
+    """Raised on HTTP 429 so the caller can fall back to another model."""
 
 @lru_cache
 def _client(api_key: str) -> genai.Client:
@@ -16,11 +21,33 @@ def _client(api_key: str) -> genai.Client:
     # mid-call, which closes its HTTP connection ("client has been closed").
     return genai.Client(api_key=api_key)
 
+def _quota_info(exc: errors.APIError) -> tuple[bool, float | None]:
+    """Return (is_daily_quota, retry_delay_seconds) from a 429 error body."""
+    details = exc.details.get("error", {}).get("details", []) if isinstance(exc.details, dict) else []
+    daily, delay = False, None
+    for item in details:
+        if not isinstance(item, dict):
+            continue
+        for violation in item.get("violations", []):
+            if "PerDay" in str(violation.get("quotaId", "")):
+                daily = True
+        match = re.fullmatch(r"([\d.]+)s", str(item.get("retryDelay", "")))
+        if match:
+            delay = float(match.group(1))
+    return daily, delay
+
 def _friendly_error(model: str, exc: errors.APIError) -> RuntimeError:
     if exc.code == 429:
-        return RuntimeError(
-            f"Gemini quota exceeded for '{model}'. Wait a minute and retry, or set a model "
-            "your plan includes (e.g. gemini-3.8-flash) in .env. Details: " + str(exc))
+        daily, _ = _quota_info(exc)
+        if daily:
+            return QuotaExceeded(
+                f"Gemini daily quota used up for '{model}'. It resets at midnight Pacific time. "
+                "Until then, set GEMINI_OUTLINE_MODEL / GEMINI_STORY_MODEL (or GEMINI_FALLBACK_MODEL) "
+                "in .env to a different model, or enable billing on your Google AI project. "
+                "Details: " + str(exc))
+        return QuotaExceeded(
+            f"Gemini rate limit hit for '{model}' (still failing after waiting). Try again in a "
+            "minute, or set GEMINI_FALLBACK_MODEL in .env. Details: " + str(exc))
     if exc.code == 404:
         return RuntimeError(
             f"Gemini model '{model}' is not available to this API key. Change "
@@ -32,14 +59,29 @@ def _friendly_error(model: str, exc: errors.APIError) -> RuntimeError:
     return RuntimeError(f"Gemini request to '{model}' failed: {exc}")
 
 def generate_json(model: str, prompt: str, temperature: float) -> dict:
-    """Call Gemini and return the response parsed as a JSON object."""
+    """Call Gemini and return the response parsed as a JSON object.
+
+    If the model's quota is exhausted and GEMINI_FALLBACK_MODEL is set, retry with that model.
+    """
     settings = get_settings()
     if not settings.gemini_api_key:
         raise RuntimeError("GEMINI_API_KEY is not configured. Add it to .env.")
+    fallback = settings.gemini_fallback_model.strip()
+    try:
+        return _generate_json(settings.gemini_api_key, model, prompt, temperature)
+    except QuotaExceeded as exc:
+        if not fallback or fallback == model:
+            raise
+        try:
+            return _generate_json(settings.gemini_api_key, fallback, prompt, temperature)
+        except QuotaExceeded as fallback_exc:
+            raise QuotaExceeded(f"{exc}\nFallback model also failed: {fallback_exc}") from fallback_exc
 
+def _generate_json(api_key: str, model: str, prompt: str, temperature: float) -> dict:
+    waited_for_quota = False
     for attempt in range(len(RETRY_DELAYS) + 1):
         try:
-            response = _client(settings.gemini_api_key).models.generate_content(
+            response = _client(api_key).models.generate_content(
                 model=model,
                 contents=prompt,
                 config=types.GenerateContentConfig(
@@ -52,6 +94,12 @@ def generate_json(model: str, prompt: str, temperature: float) -> dict:
             if exc.code in (500, 503) and attempt < len(RETRY_DELAYS):
                 time.sleep(RETRY_DELAYS[attempt])
                 continue
+            if exc.code == 429 and not waited_for_quota and attempt < len(RETRY_DELAYS):
+                daily, delay = _quota_info(exc)
+                if not daily and delay is not None and delay <= MAX_QUOTA_WAIT:
+                    waited_for_quota = True
+                    time.sleep(delay + 1)
+                    continue
             raise _friendly_error(model, exc) from exc
     if not response.text:
         raise ValueError(f"Gemini ({model}) returned an empty response; it may have been blocked.")
